@@ -58,6 +58,8 @@ herdr plugin pane open --plugin herdr-burnlog --entrypoint projects --focus
 herdr plugin pane open --plugin herdr-burnlog --entrypoint models --focus
 ```
 
+Popup reports stay open until you press Enter, including when an error is shown.
+
 `python3 burnlog.py` is equivalent to `./burnlog`. `--daily` is the current UTC day and `--monthly` the current UTC month; the default is `--all-time`.
 
 Direct CLI data is stored at `$XDG_STATE_HOME/herdr-burnlog/burnlog.sqlite3` (normally `~/.local/state/herdr-burnlog/burnlog.sqlite3`). Herdr supplies a separate plugin state directory when it launches BurnLog. To make direct commands use the linked plugin database on the tested Linux setup:

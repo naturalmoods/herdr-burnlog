@@ -887,4 +887,12 @@ def main(argv: list[str] | None = None) -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    try:
+        raise SystemExit(main())
+    finally:
+        # Herdr closes popup terminals as soon as their command exits.
+        if os.environ.get("HERDR_PLUGIN_ENTRYPOINT_ID") and sys.stdin.isatty():
+            try:
+                input("\nPress Enter to close.")
+            except (EOFError, KeyboardInterrupt):
+                pass

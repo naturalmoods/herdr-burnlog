@@ -5,7 +5,7 @@ from pathlib import Path
 root = Path(__file__).resolve().parents[1]
 manifest = tomllib.loads((root / "herdr-plugin.toml").read_text(encoding="utf-8"))
 assert manifest["id"] == "herdr-burnlog"
-assert manifest["version"] == "0.4.0"
+assert manifest["version"] == "0.4.1"
 assert manifest["min_herdr_version"] == "0.9.1"
 assert set(manifest["platforms"]) == {"linux", "macos"}
 assert {pane["id"] for pane in manifest["panes"]} == {"current", "projects", "models"}

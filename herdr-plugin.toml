@@ -1,0 +1,32 @@
+id = "herdr-burnlog"
+name = "Herdr BurnLog"
+version = "0.4.0"
+min_herdr_version = "0.9.1"
+description = "Persistent local token and recorded-cost history by project and model."
+platforms = ["linux", "macos"]
+
+[[startup]]
+command = ["python3", "burnlog.py", "startup"]
+
+[[events]]
+id = "collect-settled-agent-usage"
+on = "pane.agent_status_changed"
+command = ["python3", "burnlog.py", "event"]
+
+[[panes]]
+id = "current"
+title = "BurnLog: current project"
+command = ["python3", "burnlog.py", "current", "--all-time"]
+placement = "popup"
+
+[[panes]]
+id = "projects"
+title = "BurnLog: projects"
+command = ["python3", "burnlog.py", "projects", "--all-time"]
+placement = "popup"
+
+[[panes]]
+id = "models"
+title = "BurnLog: models"
+command = ["python3", "burnlog.py", "models", "--all-time"]
+placement = "popup"

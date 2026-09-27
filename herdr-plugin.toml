@@ -5,6 +5,11 @@ min_herdr_version = "0.9.1"
 description = "Persistent local token and recorded-cost history by project and model."
 platforms = ["linux", "macos"]
 
+[[actions]]
+id = "open"
+title = "Open BurnLog projects"
+command = ["sh", "-c", 'exec "$HERDR_BIN_PATH" plugin pane open --plugin herdr-burnlog --entrypoint projects --focus']
+
 [[startup]]
 command = ["python3", "burnlog.py", "startup"]
 

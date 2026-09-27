@@ -1,14 +1,19 @@
 id = "herdr-burnlog"
 name = "Herdr BurnLog"
-version = "0.4.1"
+version = "0.5.0"
 min_herdr_version = "0.9.1"
 description = "Persistent local token and recorded-cost history by project and model."
 platforms = ["linux", "macos"]
 
 [[actions]]
 id = "open"
-title = "Open BurnLog projects"
-command = ["sh", "-c", 'exec "$HERDR_BIN_PATH" plugin pane open --plugin herdr-burnlog --entrypoint projects --focus']
+title = "Open BurnLog current project"
+command = ["sh", "-c", 'exec "$HERDR_BIN_PATH" plugin pane open --plugin herdr-burnlog --entrypoint current --focus']
+
+[[actions]]
+id = "open-all"
+title = "Open BurnLog all projects"
+command = ["sh", "-c", 'exec "$HERDR_BIN_PATH" plugin pane open --plugin herdr-burnlog --entrypoint all --focus']
 
 [[startup]]
 command = ["python3", "burnlog.py", "startup"]
@@ -28,6 +33,12 @@ placement = "popup"
 id = "projects"
 title = "BurnLog: projects"
 command = ["python3", "burnlog.py", "projects", "--all-time"]
+placement = "popup"
+
+[[panes]]
+id = "all"
+title = "BurnLog: all projects"
+command = ["python3", "burnlog.py", "projects", "--all-time", "--all-projects"]
 placement = "popup"
 
 [[panes]]

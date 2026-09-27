@@ -190,7 +190,7 @@ class BurnLogTests(unittest.TestCase):
             claude_usage = store.usage("claude", "claude-session-example")
             self.assertEqual(2, len(claude_usage))
             self.assertEqual(7, claude_usage[0]["output_tokens"])
-            self.assertIsNone(claude_usage[0]["total_tokens"])
+            self.assertEqual(3 + 7 + 4 + 5, claude_usage[0]["total_tokens"])
             self.assertEqual(2, len(store.models("claude", "claude-session-example")))
 
             pi_usage = store.usage("pi", "pi-session-example")
@@ -264,11 +264,11 @@ class BurnLogTests(unittest.TestCase):
         self.assertEqual(8, sum(item["usage_changed"] for item in json.loads(collect.stdout).values()))
 
         projects = subprocess.run(
-            ["python3", str(script), "projects", "--all-time"], env=env,
+            ["python3", str(script), "projects", "--all-time", "--all-projects"], env=env,
             text=True, capture_output=True, check=True,
         ).stdout
         models = subprocess.run(
-            ["python3", str(script), "models", "--all-time"], env=env,
+            ["python3", str(script), "models", "--all-time", "--all-projects"], env=env,
             text=True, capture_output=True, check=True,
         ).stdout
         plugin_env = env | {
@@ -282,13 +282,13 @@ class BurnLogTests(unittest.TestCase):
         self.assertIn("repo", projects)
         with Store(self.root / "plugin-state" / "burnlog.sqlite3") as store:
             project_id = store.sessions()[0]["project_id"]
-        self.assertIn(project_id, projects)
+        self.assertNotIn(project_id, projects)
         selected = subprocess.check_output(
             ["python3", str(script), "project", project_id], env=env, text=True)
         self.assertIn("pi-model-b", selected)
         self.assertIn("codex-model-a", models)
         self.assertIn("pi-model-b", models)
-        self.assertIn("Models", current)
+        self.assertIn("AGENT   MODEL", current)
         self.assertIn("codex-model-a", current)
         self.assertIn("?", current)  # unavailable mixed-source total/cost stays visible
         self.assertIn("120", current)  # Codex total does not add its overlapping cached input
@@ -319,11 +319,16 @@ class BurnLogTests(unittest.TestCase):
         script = Path(__file__).parents[1] / "burnlog.py"
         env = os.environ | {
             "HERDR_PLUGIN_STATE_DIR": str(self.root / "event-state"),
-            "HERDR_PLUGIN_EVENT_JSON": json.dumps({"agent_status": "working"}),
+            "HERDR_PLUGIN_EVENT_JSON": json.dumps({"data": {"agent_status": "working"}}),
         }
         result = subprocess.run(["python3", str(script), "event"], env=env,
                                 text=True, capture_output=True, check=True)
         self.assertEqual("", result.stdout)
+        # Herdr nests the status under "data"; a settled agent triggers collection.
+        env |= {"HOME": str(self.root), "HERDR_PLUGIN_EVENT_JSON": json.dumps({"data": {"agent_status": "idle"}})}
+        result = subprocess.run(["python3", str(script), "event"], env=env,
+                                text=True, capture_output=True, check=True)
+        self.assertIn("claude", json.loads(result.stdout))
 
     def test_plugin_current_requires_verified_context_cwd(self):
         old = {name: os.environ.get(name) for name in ("HERDR_PLUGIN_ID", "HERDR_PLUGIN_CONTEXT_JSON")}

@@ -581,6 +581,10 @@ def collect_codex(store: Store, paths=None) -> dict:
     return result
 
 
+def _sum_known(*values):
+    return sum(values) if all(isinstance(v, int) for v in values) else None
+
+
 def collect_claude(store: Store, paths=None) -> dict:
     """Collect locally verified Claude Code 2.1.220--2.1.282 JSONL records."""
     result = {"files": 0, "sessions": 0, "usage_changed": 0, "incomplete": 0, "unattributed": 0}
@@ -609,6 +613,9 @@ def collect_claude(store: Store, paths=None) -> dict:
                 input_tokens=raw.get("input_tokens"), output_tokens=raw.get("output_tokens"),
                 cache_read_tokens=raw.get("cache_read_input_tokens"),
                 cache_write_tokens=raw.get("cache_creation_input_tokens"),
+                # Anthropic input_tokens excludes cache tokens, so the four parts add up.
+                total_tokens=_sum_known(raw.get("input_tokens"), raw.get("output_tokens"),
+                                        raw.get("cache_read_input_tokens"), raw.get("cache_creation_input_tokens")),
             ))
             if model and model != previous_model:
                 events.append({"evidence_id": f"message:{evidence}", "model": model,
@@ -706,11 +713,16 @@ def _project_name(store: Store, project_id: str) -> str:
     for kind, value in rows:
         if kind == "git-remote":
             return value.rstrip("/").rsplit("/", 1)[-1]
+    for kind, value in rows:
+        if kind == "git-root":  # local repository without a remote
+            return Path(value).name
     row = store.db.execute(
         "SELECT path FROM locations WHERE project_id=? ORDER BY last_seen DESC LIMIT 1", (project_id,)
     ).fetchone()
     if row:
-        return Path(row[0]).name or row[0]
+        # No git remote: a bare folder name ("om", "tests") is ambiguous, so show the ~-relative path.
+        home = str(Path.home())
+        return "~" + row[0][len(home):] if row[0] == home or row[0].startswith(home + "/") else row[0]
     row = store.db.execute("SELECT identity_value FROM projects WHERE id=?", (project_id,)).fetchone()
     return row[0] if row else project_id
 
@@ -725,7 +737,8 @@ def _select_project(store: Store, selector: str) -> dict:
     exact_id = [project for project in projects if project["id"] == selector]
     if exact_id:
         return exact_id[0]
-    matches = [project for project in projects if project["name"].casefold() == selector.casefold()]
+    matches = [project for project in projects
+               if selector.casefold() in (project["name"].casefold(), Path(project["name"]).name.casefold())]
     if not matches:
         raise ValueError(f"unknown project: {selector}")
     if len(matches) != 1:
@@ -748,7 +761,8 @@ def _totals(store: Store, project_id: str, period: str, group_models: bool = Fal
                      "COALESCE(u.model, '(unknown)') AS model, " if group_models else "")
     numeric = ("input_tokens", "output_tokens", "cache_read_tokens", "cache_write_tokens", "total_tokens")
     aggregates = ", ".join(
-        f"CASE WHEN COUNT(*)=COUNT(u.{column}) THEN SUM(u.{column}) END AS {column}"
+        # Tokens: sum what the sources recorded (NULL only if none did); cost stays all-or-nothing.
+        f"SUM(u.{column}) AS {column}"
         for column in numeric
     )
     sql = f"""SELECT {select_groups}COUNT(*) AS records, {aggregates},
@@ -776,51 +790,113 @@ def _context_cwd() -> Path:
     return Path.cwd().resolve()
 
 
-def _cell(value, money: bool = False) -> str:
+def _open_project_ids(store: Store) -> set[str] | None:
+    """Projects of panes open in Herdr, or None outside Herdr."""
+    herdr = os.environ.get("HERDR_BIN_PATH") or (os.environ.get("HERDR_ENV") and "herdr")
+    if not herdr:
+        return None
+    try:
+        out = subprocess.run([herdr, "pane", "list"], capture_output=True, text=True, timeout=5, check=True).stdout
+        panes = json.loads(out)["result"]["panes"]
+    except (OSError, subprocess.SubprocessError, ValueError, KeyError, TypeError):
+        return None
+    cwds = {pane.get("foreground_cwd") or pane.get("cwd") for pane in panes}
+    return {store.resolve_project(cwd) for cwd in cwds if isinstance(cwd, str) and Path(cwd).is_dir()}
+
+
+def _human(value) -> str:
     if value is None:
         return "?"
-    return f"{value:.6f}" if money else str(value)
+    for limit, suffix in ((1e9, "B"), (1e6, "M"), (1e3, "k")):
+        if value >= limit:
+            return f"{value / limit:.1f}{suffix}"
+    return str(value)
 
 
-def _print_table(headers: list[str], rows: list[list[object]]) -> None:
-    rendered = [[_cell(value, header == "COST_USD") for header, value in zip(headers, row)] for row in rows]
-    widths = [len(header) for header in headers]
-    for row in rendered:
-        widths = [max(width, len(value)) for width, value in zip(widths, row)]
-    print("  ".join(header.ljust(width) for header, width in zip(headers, widths)))
-    for row in rendered:
-        print("  ".join(value.ljust(width) for value, width in zip(row, widths)))
+def _usage_cells(row: dict) -> list:
+    """TOTAL, INPUT, OUTPUT, CACHE, COST cells for one totals row (empty dict = no usage)."""
+    if not row:
+        return ["0", "0", "0", "0", "$0.00"]
+    reads, writes = row.get("cache_read_tokens"), row.get("cache_write_tokens")
+    cache = None if reads is None and writes is None else (reads or 0) + (writes or 0)
+    cost = row.get("cost_total")
+    return [_human(row.get("total_tokens")), _human(row.get("input_tokens")), _human(row.get("output_tokens")),
+            _human(cache), "?" if cost is None else f"${cost:.2f}"]
 
 
-def _total_row(project: dict, totals: list[dict]) -> list[object]:
-    if not totals:
-        return [project["name"], project["id"], 0, 0, 0, 0, 0, 0, 0.0]
-    row = totals[0]
-    return [project["name"], project["id"], row["records"], row["input_tokens"],
-            row["output_tokens"], row["cache_read_tokens"], row["cache_write_tokens"],
-            row["total_tokens"], row["cost_total"]]
+def _print_pretty(labels: list[str], label_styles: list[str], rows: list[tuple]) -> None:
+    """rows: (sort_total, label_cells, usage_row), colored on a terminal."""
+    color = sys.stdout.isatty() and not os.environ.get("NO_COLOR")
+    paint = (lambda code, text: f"\033[{code}m{text}\033[0m") if color else (lambda _code, text: text)
+    headers = [*labels, "TOTAL", "INPUT", "OUTPUT", "CACHE", "COST"]
+    styles = [*label_styles, "1;33", "32", "35", "2", "1;32"]
+    table = [[*cells, *_usage_cells(usage)] for _total, cells, usage in rows]
+    widths = [max([len(h)] + [len(r[i]) for r in table]) for i, h in enumerate(headers)]
+    left = len(labels)
+    fit = lambda i, v, w: v.ljust(w) if i < left else v.rjust(w)
+    print(paint("1", "  ".join(fit(i, h, w) for i, (h, w) in enumerate(zip(headers, widths)))))
+    for r in table:
+        print("  ".join(paint(st, fit(i, v, w)) for i, (v, w, st) in enumerate(zip(r, widths, styles))))
 
 
-def _print_projects(store: Store, period: str) -> None:
-    headers = ["PROJECT", "ID", "RECORDS", "INPUT", "OUTPUT", "CACHE_READ", "CACHE_WRITE", "TOTAL", "COST_USD"]
-    _print_table(headers, [_total_row(project, _totals(store, project["id"], period))
-                           for project in _projects(store)])
+def _visible_projects(store: Store, show_all: bool) -> tuple[list[dict], bool]:
+    open_ids = None if show_all else _open_project_ids(store)
+    projects = [p for p in _projects(store) if open_ids is None or p["id"] in open_ids]
+    if show_all:  # the full list is for git projects; plain folders only show while open in Herdr
+        git_ids = {row[0] for row in store.db.execute(
+            "SELECT project_id FROM aliases WHERE kind IN ('git-remote', 'git-root', 'git-common-dir')")}
+        projects = [p for p in projects if p["id"] in git_ids]
+    return projects, open_ids is not None
+
+
+def _footer(filtered: bool, empty: bool) -> None:
+    dim = (lambda t: f"\033[2m{t}\033[0m") if sys.stdout.isatty() and not os.environ.get("NO_COLOR") else str
+    if empty:
+        print(dim("No usage for open projects yet." if filtered else "No usage recorded yet."))
+    elif filtered:
+        print(dim("\nOpen Herdr projects only; use --all-projects for every project."))
+
+
+def _print_projects(store: Store, period: str, show_all: bool = False) -> None:
+    projects, filtered = _visible_projects(store, show_all)
+    rows = []
+    for project in projects:
+        totals = _totals(store, project["id"], period)
+        usage = totals[0] if totals else {}
+        rows.append((usage.get("total_tokens", 0), [project["name"]], usage))
+    rows.sort(key=lambda item: -(item[0] or 0))
+    _print_pretty(["PROJECT"], ["1;36"], rows)
+    _footer(filtered, not rows)
+
+
+_TOKEN_KEYS = ("input_tokens", "output_tokens", "cache_read_tokens", "cache_write_tokens", "total_tokens")
+
+
+def _real_usage(row: dict) -> bool:
+    """Skip Claude Code <synthetic> placeholders and rows whose source recorded no tokens."""
+    return row["model"] != "<synthetic>" and any(row[key] for key in _TOKEN_KEYS)
+
+
+def _print_models(store: Store, period: str, show_all: bool = False) -> None:
+    projects, filtered = _visible_projects(store, show_all)
+    rows = [(row["total_tokens"], [project["name"], row["agent"], row["model"] or "?"], row)
+            for project in projects for row in _totals(store, project["id"], period, True)
+            if _real_usage(row)]
+    rows.sort(key=lambda item: (item[1][0], -(item[0] or 0)))
+    _print_pretty(["PROJECT", "AGENT", "MODEL"], ["1;36", "34", "37"], rows)
+    _footer(filtered, not rows)
 
 
 def _print_project(store: Store, project: dict, period: str) -> None:
-    _print_table(
-        ["PROJECT", "ID", "RECORDS", "INPUT", "OUTPUT", "CACHE_READ", "CACHE_WRITE", "TOTAL", "COST_USD"],
-        [_total_row(project, _totals(store, project["id"], period))],
-    )
-    models = _totals(store, project["id"], period, True)
+    totals = _totals(store, project["id"], period)
+    usage = totals[0] if totals else {}
+    _print_pretty(["PROJECT"], ["1;36"], [(0, [project["name"]], usage)])
+    models = [(row["total_tokens"], [row["agent"], row["model"] or "?"], row)
+              for row in _totals(store, project["id"], period, True) if _real_usage(row)]
     if models:
-        print("\nModels")
-        _print_table(
-            ["AGENT", "PROVIDER", "MODEL", "RECORDS", "INPUT", "OUTPUT", "CACHE_READ", "CACHE_WRITE", "TOTAL", "COST_USD"],
-            [[row[key] for key in ("agent", "provider", "model", "records", "input_tokens", "output_tokens",
-                                    "cache_read_tokens", "cache_write_tokens", "total_tokens", "cost_total")]
-             for row in models],
-        )
+        models.sort(key=lambda item: -(item[0] or 0))
+        print()
+        _print_pretty(["AGENT", "MODEL"], ["34", "37"], models)
 
 
 def _add_period(parser: argparse.ArgumentParser) -> None:
@@ -836,6 +912,8 @@ def _parser() -> argparse.ArgumentParser:
     commands = parser.add_subparsers(dest="command", required=True)
     for name in ("projects", "current", "models"):
         _add_period(commands.add_parser(name))
+    for name in ("projects", "models"):
+        commands.choices[name].add_argument("--all-projects", action="store_true")
     project = commands.add_parser("project")
     project.add_argument("name")
     _add_period(project)
@@ -861,20 +939,15 @@ def main(argv: list[str] | None = None) -> int:
                         event = json.loads(os.environ.get("HERDR_PLUGIN_EVENT_JSON", "{}"))
                     except json.JSONDecodeError:
                         event = {}
-                    if not isinstance(event, dict) or event.get("agent_status") not in ("idle", "done", "blocked"):
+                    data = event.get("data") if isinstance(event, dict) else None
+                    status = (data if isinstance(data, dict) else {}).get("agent_status")
+                    if status not in ("idle", "done", "blocked"):
                         return 0
                 print(json.dumps(collect_all(store), sort_keys=True))
             elif args.command == "projects":
-                _print_projects(store, args.period)
+                _print_projects(store, args.period, args.all_projects)
             elif args.command == "models":
-                rows = []
-                for project in _projects(store):
-                    for row in _totals(store, project["id"], args.period, True):
-                        rows.append([project["name"], row["agent"], row["provider"], row["model"], row["records"],
-                                     row["input_tokens"], row["output_tokens"], row["cache_read_tokens"],
-                                     row["cache_write_tokens"], row["total_tokens"], row["cost_total"]])
-                _print_table(["PROJECT", "AGENT", "PROVIDER", "MODEL", "RECORDS", "INPUT", "OUTPUT",
-                              "CACHE_READ", "CACHE_WRITE", "TOTAL", "COST_USD"], rows)
+                _print_models(store, args.period, args.all_projects)
             else:
                 project = (_select_project(store, args.name) if args.command == "project"
                            else {"id": store.resolve_project(_context_cwd())})

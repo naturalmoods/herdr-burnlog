@@ -60,17 +60,23 @@ herdr plugin pane open --plugin herdr-burnlog --entrypoint models --focus
 
 Popup reports stay open until you press Enter, including when an error is shown.
 
-To open BurnLog with your Herdr prefix followed by `b`, add to `~/.config/herdr/config.toml` and run `herdr server reload-config`:
+To open BurnLog with your Herdr prefix (`prefix+b`: current project with its models; `prefix+shift+b`: all projects), add to `~/.config/herdr/config.toml` and run `herdr server reload-config`:
 
 ```toml
 [[keys.command]]
 key = "prefix+b"
 type = "plugin_action"
 command = "herdr-burnlog.open"
-description = "open BurnLog projects"
+description = "BurnLog current project"
+
+[[keys.command]]
+key = "prefix+shift+b"
+type = "plugin_action"
+command = "herdr-burnlog.open-all"
+description = "BurnLog all projects"
 ```
 
-`python3 burnlog.py` is equivalent to `./burnlog`. `--daily` is the current UTC day and `--monthly` the current UTC month; the default is `--all-time`.
+`python3 burnlog.py` is equivalent to `./burnlog`. `--daily` is the current UTC day and `--monthly` the current UTC month; the default is `--all-time`. Inside Herdr, `projects` and `models` list only projects with an open pane; `--all-projects` lists every Git project (plain folders show only while open).
 
 Direct CLI data is stored at `$XDG_STATE_HOME/herdr-burnlog/burnlog.sqlite3` (normally `~/.local/state/herdr-burnlog/burnlog.sqlite3`). Herdr supplies a separate plugin state directory when it launches BurnLog. To make direct commands use the linked plugin database on the tested Linux setup:
 
@@ -92,7 +98,12 @@ Treat the database as private: local paths and repository remotes can still reve
 
 - Events trigger idempotent scans but carry no usage data; missed events and agents run outside Herdr require `./burnlog collect` to backfill.
 - Startup scans run on Herdr server restore, not on every attach, link, or enable. There is no daemon or periodic scheduler.
-- Costs are shown only when recorded by the source; BurnLog never estimates prices.
+- Costs are shown only when recorded by the source; BurnLog never estimates prices. A total cost is `?` if any of its records lacks a cost (e.g. Claude Code or Codex usage). Token totals add up whatever the sources recorded.
+- Only this machine's session files are read. Work done on another computer is not included; there is no sync or database merge. To include it, copy that machine's session folders (`~/.claude/projects`, `~/.pi/agent/sessions`, `~/.codex/sessions`) here and run `./burnlog collect --claude PATH --pi PATH --codex PATH`. Sessions whose checkout path does not exist here stay unattributed.
+- History starts at the oldest session file still on disk when BurnLog first ran. Claude Code deletes transcripts after 30 days by default (`cleanupPeriodDays`), so older Claude usage cannot be recovered; from then on BurnLog keeps its own copy.
+- CACHE is usually most of TOTAL: agents resend the whole conversation on every call, and each resend counts as cache reads. INPUT counts only new, uncached tokens. Cache reads are billed at a fraction of the input price.
+- Claude Code records no total or cost; BurnLog sums its input, output and cache tokens (they do not overlap) and shows `?` for cost.
+- The `models` view hides Claude Code `<synthetic>` rows (placeholders for interrupts and API errors) and rows where the source recorded no token data.
 - JSON/CSV export and OpenCode collection are not implemented.
 - Popup panes are supported; Herdr 0.9.1 has no general plugin sidebar widget.
 

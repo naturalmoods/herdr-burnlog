@@ -117,11 +117,9 @@ python3 tests/check_herdr.py          # installed Herdr 0.9.1+
 
 The Herdr check uses a fresh temporary home and uniquely named temporary server. It exercises link, collection, idempotent rescan, reports, pane opening, unlink/relink, uninstall, and state persistence without touching an active user server or deleting user data.
 
-See [format and Herdr evidence](docs/contracts.md), the [release checklist](docs/release-checklist.md), and the [implementation phases](docs/prompts.md).
-
 ## Marketplace status
 
-BurnLog is published on GitHub; marketplace discovery must be verified separately. Herdr 0.9.1 discovers, without review, public non-fork, non-archived GitHub repositories carrying the `herdr-plugin` topic when their default branch has a parseable `herdr-plugin.toml`. Discovery refreshes about every 30 minutes; no PR or submission form is prescribed. See the [release checklist](docs/release-checklist.md) for verified publication, installation, and discovery status.
+BurnLog is published on GitHub; marketplace discovery must be verified separately. Herdr 0.9.1 discovers, without review, public non-fork, non-archived GitHub repositories carrying the `herdr-plugin` topic when their default branch has a parseable `herdr-plugin.toml`. Discovery refreshes about every 30 minutes; no PR or submission form is prescribed.
 
 ## License
 

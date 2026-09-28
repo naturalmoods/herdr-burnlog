@@ -46,6 +46,10 @@ Herdr 0.9.1 preserves plugin config and state on both uninstall and unlink. A Gi
 
 ## Use
 
+![burnlog current](assets/current.png)
+
+![burnlog models --all-projects](assets/models.png)
+
 ```sh
 ./burnlog collect
 ./burnlog projects --all-time
